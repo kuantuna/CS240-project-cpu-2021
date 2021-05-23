@@ -190,12 +190,14 @@ always @* begin
 			PCnext      = PC + 1;             	 // Last step of the instruction.
 			Wnext       = W;					 // W is not going to change.
 			
+			if(opcode == 3'b110 && operand == 0)
+				addr_toRAM = num;
 
-			if(opcode == 3'b110) begin     		 // CPfW							 *A = W
+			else     		 					 // CPfW							 *A = W
 				addr_toRAM = operand;			 // We will be writing to the memory pointed by the operand.
-				data_toRAM = W;					 // We will be writing value of W to the memory.
-				wrEn       = 1;                  // Making sure that we are writing to the memory.
-			end
+
+			data_toRAM = W;					 	 // We will be writing value of W to the memory.
+			wrEn       = 1;                  	 // Making sure that we are writing to the memory.
 
 			stateNext = 0;						 // Next state is 0.                 4 -> 0
 		end
