@@ -247,9 +247,8 @@ always @* begin
 					else
 						Wnext = {W[14:0], W[15]};
 				end
-			end
-			if(counterNext <= num[3:0])
 				stateNext = 7;
+			end
 			else begin
 				stateNext = 0;
 				PCnext    = PC + 1;
