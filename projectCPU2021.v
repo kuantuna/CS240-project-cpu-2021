@@ -21,6 +21,7 @@ output reg [12:0] PC; // This has been added as an output for TB purposes
 output reg [15:0] W; // This has been added as an output for TB purposes
 
 // Your design goes in here
+reg [3:0] counter, counterNext;
 reg [15:0] num, numNext;
 reg [2:0]  opcode, opcodeNext;
 reg [12:0] operand, operandNext;
@@ -29,6 +30,7 @@ reg [2:0]  state, stateNext;
 reg [15:0] Wnext;
 
 always @(posedge clk) begin
+	counter <= #1 counterNext;
 	num     <= #1 numNext;
 	opcode  <= #1 opcodeNext;
 	operand <= #1 operandNext;
@@ -39,6 +41,7 @@ end
 
 always @* begin
 	addr_toRAM  = 0;
+	counterNext = counter;
 	data_toRAM  = 0;
 	numNext     = num;
 	opcodeNext  = opcode;
@@ -50,6 +53,7 @@ always @* begin
 	
 	if(rst) begin
 		addr_toRAM  = 0;
+		counterNext = 0;
 		data_toRAM  = 0;
 		numNext     = 0;
 		opcodeNext  = 0;
@@ -62,6 +66,7 @@ always @* begin
 	
 	case(state)
 		0: begin                                // --- REQUEST THE INSTRUCTION POINTED BY PC ---
+			counterNext = 0;
 			data_toRAM  = 0;                    // There won't be any write operation,      	DEFAULT.
 			numNext     = 0;                    // No data has been retrieved,              	DEFAULT.
 			opcodeNext  = opcode;               // Opcode hasn't been retrieved,            	DEFAULT.
@@ -77,6 +82,7 @@ always @* begin
 		
 		
 		1: begin                                 // --- GET THE OPCODE AND OPERAND OF THE INSTRUCTION, REQUEST NUMBER (DATA) ---
+		   counterNext = 0;
 			data_toRAM  = 0;                     // There won't be any write operation,      	DEFAULT.
 			numNext     = 0;                     // No data has been retrieved,              	DEFAULT.
 			
@@ -87,19 +93,14 @@ always @* begin
 			Wnext       = W;                     // W is not going to change.
 			wrEn        = 0;                     // Making sure that we're reading from memory.
 			
-			if(operandNext == 0) begin			 // IF: operand is 0 then indirection will be done.
-				if(opcodeNext == 3'b110)
-					stateNext = 7;				 // CPfW
-				else if(opcodeNext == 3'b100 || opcodeNext == 3'b111)
-					stateNext = 6;				 // SZ or JMP
-				else
-					stateNext = 5;				 // ADD or NAND or SRRL or GE or CP2W
+			if(data_fromRAM[12:0] == 0) begin	 // IF: operand is 0 then indirection will be done.
+				stateNext = 5;				 	 // Request **2.
 			end									 // ------------------------------------------------
 
 			else begin							 // ELSE: normal instructions will be performed.
-				if(opcodeNext == 3'b110)
+				if(data_fromRAM[15:13] == 3'b110)
 					stateNext = 4;				 // CPfW
-				else if(opcodeNext == 3'b100 || opcodeNext == 3'b111)
+				else if(data_fromRAM[15:13] == 3'b100 || data_fromRAM[15:13] == 3'b111)
 					stateNext = 3;				 // SZ or  JMP
 				else
 					stateNext = 2;				 // ADD or NAND or SRRL or GE or CP2W
@@ -111,44 +112,57 @@ always @* begin
 			addr_toRAM = 0;                  	 // We neither read nor write to the memory, 	DEFAULT.
 			data_toRAM = 0;                  	 // There won't be any write operation,      	DEFAULT.
 
+			counterNext = 0;
 			numNext     = data_fromRAM;          // Get number pointed by operand.
 			opcodeNext  = opcode;                // Opcode is not going to change.
 			operandNext = operand;               // Operand is not going to change.
-			PCnext      = PC + 1;             	 // Last step of the instruction.
 			wrEn        = 0;                  	 // Making sure that we're not writing to "memory".
 			
-			if(opcode == 3'b000)           		 // ADD  =>                          W = W + *A
-				Wnext = W + numNext;
+			if(opcode == 3'b000) begin     		 // ADD  =>                          W = W + *A
+				Wnext  = W + data_fromRAM;
+				PCnext = PC + 1;            	 // Last step of the instruction.
+			end
 			
-			else if(opcode == 3'b001)     		 // NAND =>                          W = ~(W & (*A))
-				Wnext = ~(W & numNext);
+			else if(opcode == 3'b001) begin		 // NAND =>                          W = ~(W & (*A))
+				Wnext  = ~(W & data_fromRAM);
+				PCnext = PC + 1;            	 // Last step of the instruction.
+			end
 			
 			else if(opcode == 3'b010) begin      // SRRL =>							 if((*A) is less than 16) W = W >> (*A)
 												 //									 else if((*A) is between 16 and 31) W = W << lower4bits(*A)
 												 //									 else if((*A) is between 32 and 47) W = RotateRight W by lower4bits(*A)
 												 //									 else W = RotateLeft W by lower4bits(*A)
-				if(numNext < 16)
-					Wnext = W >> numNext;
-				else if(numNext > 16 && numNext < 31)
-					Wnext = W << numNext[3:0];
-				else if(numNext > 32 && numNext < 47)
-					// ROTATE RIGHT BY LOWER 4 BITS OF NUMNEXT
-				else
-					// ROTATE LEFT BY LOWER 4 BITS OF NUMNEXT
+				if(data_fromRAM < 16) begin
+					Wnext  = W >> data_fromRAM;
+					PCnext = PC + 1;             // Last step of the instruction.
+				end
+
+				else if(data_fromRAM > 16 && data_fromRAM < 31) begin
+					Wnext  = W << data_fromRAM[3:0];
+					PCnext = PC + 1;             // Last step of the instruction.
+				end
+				else 
+					stateNext = 7;
 			end
 			
-			else if(opcode == 3'b011)     		 // GE   =>                          W = W >= (*A)
-				Wnext = W >= numNext;
+			else if(opcode == 3'b011) begin		 // GE   =>                          W = W >= (*A)
+				Wnext  = W >= data_fromRAM;
+				PCnext = PC + 1;            	 // Last step of the instruction.
+			end
 			
-			else if(opcode == 3'b101)     		 // CP2W =>                          W = *A
-				Wnext = numNext;
-			
-			stateNext = 0;                       // Next state is 0.                 2 -> 0
+			else if(opcode == 3'b101) begin		 // CP2W =>                          W = *A
+				Wnext = data_fromRAM;
+				PCnext      = PC + 1;            // Last step of the instruction.
+			end
+				
+			if(~(opcode == 3'b010 && data_fromRAM > 32))
+				stateNext = 0;                       // Next state is 0.                 2 -> 0
 		end
 		
 		
 		3: begin								 // --- GET NUMBER (DATA), PERFORM -SZ, JMP- INSTRUCTIONS ---					  UPDATES PC
 			addr_toRAM = 0;                  	 // We neither read nor write to the memory, 	DEFAULT.
+			counterNext = 0;
 			data_toRAM = 0;                  	 // There won't be any write operation,      	DEFAULT.
 
 			numNext     = data_fromRAM;          // Get number pointed by operand.
@@ -158,16 +172,17 @@ always @* begin
 			wrEn        = 0;                  	 // Making sure that we're not writing to "memory".
 
 			if(opcode == 3'b100)     			 // SZ								 PC = ((*A) == 0) ? (PC+2) : (PC+1)
-				PCnext = (numNext == 0) ? (PC + 2) : (PC + 1);
+				PCnext = (data_fromRAM == 0) ? (PC + 2) : (PC + 1);
 
 			else if(opcode == 3'b111)     		 // JMP								 PC = lower13bits(*A)
-				PCnext = numNext[12:0];
+				PCnext = data_fromRAM[12:0];
 
 			stateNext = 0;						 // Next state is 0.                 3 -> 0
 		end
 
 
 		4: begin								 // --- PERFORM CPfW INSTRUCTION ---											  WRITES TO MEMORY
+			counterNext = 0;
 			numNext = 0;						 // Since it won't be used, no need to read it, DEFAULT.
 
 			opcodeNext  = opcode;                // Opcode is not going to change.
@@ -185,6 +200,61 @@ always @* begin
 			stateNext = 0;						 // Next state is 0.                 4 -> 0
 		end
 	
+
+		5: begin
+			counterNext = 0;
+			data_toRAM  = 0;                     // There won't be any write operation,      	DEFAULT.
+			numNext     = 0;                     // Since it won't be used, no need to read it, DEFAULT.
+			
+			addr_toRAM  = 2;  					 // Request *2;
+			opcodeNext  = opcode;   			 // Opcode is not going to change.
+			operandNext = operand;               // Operand is not going to change.
+			PCnext      = PC;                    // PC is not going to change.
+			Wnext       = W;                     // W is not going to change.
+			wrEn        = 0;                     // Making sure that we're reading from memory.
+
+			stateNext = 6;
+		end
+
+
+		6: begin
+			counterNext = 0;
+			data_toRAM  = 0;                     // There won't be any write operation,      	DEFAULT.
+
+			addr_toRAM = data_fromRAM;			 // Request **2.	
+			numNext = data_fromRAM;				 // Get *2.
+			opcodeNext  = opcode;   			 // Opcode is not going to change.
+			operandNext = operand;               // Operand is not going to change.
+			PCnext      = PC;                    // PC is not going to change.
+			Wnext       = W;                     // W is not going to change.
+			wrEn        = 0;                     // Making sure that we're reading from memory.
+
+			if(opcode == 3'b110)
+				stateNext = 4;				 	 // CPfW
+			else if(opcode == 3'b100 || opcode == 3'b111)
+				stateNext = 3;				 	 // SZ or JMP
+			else
+				stateNext = 2;				 	 // ADD or NAND or SRRL or GE or CP2W
+		end
+
+
+		7: begin
+			counterNext = counter + 1;
+			if(counterNext <= num[3:0]) begin
+				if(opcode == 3'b010) begin
+					if(num > 32 && num < 47)
+						Wnext = {W[0], W[15:1]};
+					else
+						Wnext = {W[14:0], W[15]};
+				end
+			end
+			if(counterNext <= num[3:0])
+				stateNext = 7;
+			else begin
+				stateNext = 0;
+				PCnext    = PC + 1;
+			end
+		end
 	endcase
 end
 
